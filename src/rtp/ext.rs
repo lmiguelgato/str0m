@@ -26,6 +26,11 @@ pub enum Extension {
     /// <http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time>
     AbsoluteSendTime,
     /// <http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time>
+    ///
+    /// Used to stamp RTP packets with an NTP timestamp showing when the first audio or video frame
+    /// in a packet was originally captured. The intent is to provide audio-to-video synchronization
+    /// when RTCP-terminating intermediate systems (e.g. mixers) are involved. Supports both short
+    /// form (8 bytes: timestamp only) and extended form (16 bytes: timestamp + clock offset).
     AbsoluteCaptureTime,
     /// <urn:ietf:params:rtp-hdrext:ssrc-audio-level>
     AudioLevel,
@@ -912,8 +917,12 @@ pub struct ExtensionValues {
     pub tx_time_offs: Option<u32>,
     #[doc(hidden)]
     pub abs_send_time: Option<Instant>,
+    /// NTP timestamp (64-bit UQ32.32 format) of when the first frame in a packet was originally
+    /// captured. Used for abs-capture-time extension.
     #[doc(hidden)]
     pub abs_capture_timestamp: Option<u64>,
+    /// Estimated capture clock offset (64-bit signed Q32.32 format). The sender's estimate of the
+    /// offset between its own NTP clock and the capture system's NTP clock.
     #[doc(hidden)]
     pub estimated_capture_clock_offset: Option<i64>,
     #[doc(hidden)]
