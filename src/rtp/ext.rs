@@ -653,9 +653,9 @@ impl Extension {
             AbsoluteCaptureTime => {
                 // 64-bit NTP timestamp (UQ32.32 format)
                 let timestamp = ev.abs_capture_timestamp?;
-                
+
                 buf[..8].copy_from_slice(&timestamp.to_be_bytes());
-                
+
                 // Optional: estimated capture clock offset (64-bit signed, Q32.32 format)
                 if let Some(offset) = ev.estimated_capture_clock_offset {
                     if buf.len() < 16 {
@@ -785,13 +785,13 @@ impl Extension {
                 if buf.len() < 8 {
                     return None;
                 }
-                
+
                 // Read 64-bit NTP timestamp (UQ32.32 format)
                 let timestamp = u64::from_be_bytes([
                     buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
                 ]);
                 ev.abs_capture_timestamp = Some(timestamp);
-                
+
                 // Optional: estimated capture clock offset (64-bit signed, Q32.32 format)
                 if buf.len() >= 16 {
                     let offset = i64::from_be_bytes([
@@ -1320,7 +1320,7 @@ mod test {
     fn abs_capture_time() {
         // NTP timestamp for testing (some arbitrary time)
         let timestamp: u64 = 0x123456789ABCDEF0;
-        
+
         let mut exts = ExtensionMap::empty();
         exts.set(5, Extension::AbsoluteCaptureTime);
         let ev = ExtensionValues {
@@ -1344,7 +1344,7 @@ mod test {
         let timestamp: u64 = 0x123456789ABCDEF0;
         // Clock offset (signed 64-bit)
         let clock_offset: i64 = -123456789;
-        
+
         let mut exts = ExtensionMap::empty();
         exts.set(5, Extension::AbsoluteCaptureTime);
         let ev = ExtensionValues {
