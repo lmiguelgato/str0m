@@ -2035,7 +2035,7 @@ mod test {
     #[test]
     fn event_is_reasonably_sized() {
         let n = std::mem::size_of::<Event>();
-        assert!(n < 490); // Increased from 470 to accommodate abs-capture-time fields (2 x u64 = 32 bytes)
+        assert!(n < 490); // Increased from 470 to accommodate abs-capture-time fields (2 x Option<u64> = 32 bytes)
     }
 }
 
