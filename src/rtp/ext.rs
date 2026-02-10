@@ -25,6 +25,13 @@ use super::{Mid, Rid};
 pub enum Extension {
     /// <http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time>
     AbsoluteSendTime,
+    /// <http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time>
+    ///
+    /// Used to stamp RTP packets with an NTP timestamp showing when the first audio or video frame
+    /// in a packet was originally captured. The intent is to provide audio-to-video synchronization
+    /// when RTCP-terminating intermediate systems (e.g. mixers) are involved. Supports both short
+    /// form (8 bytes: timestamp only) and extended form (16 bytes: timestamp + clock offset).
+    AbsoluteCaptureTime,
     /// <urn:ietf:params:rtp-hdrext:ssrc-audio-level>
     AudioLevel,
     /// <urn:ietf:params:rtp-hdrext:toffset>
@@ -140,6 +147,10 @@ pub trait ExtensionSerializer: Debug + Send + Sync + 'static {
 impl Extension {
     fn requires_two_byte_form(&self, ev: &ExtensionValues) -> bool {
         match self {
+            Extension::AbsoluteCaptureTime => {
+                // If estimated_capture_clock_offset is present, we need 16 bytes (two-byte form)
+                ev.estimated_capture_clock_offset.is_some()
+            }
             Extension::UnknownUri(_, serializer) => serializer.requires_two_byte_form(ev),
             _ => false,
         }
@@ -172,6 +183,10 @@ const EXT_URI: &[(Extension, &str)] = &[
     (
         Extension::AbsoluteSendTime,
         "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+    ),
+    (
+        Extension::AbsoluteCaptureTime,
+        "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
     ),
     (
         Extension::AudioLevel,
@@ -288,6 +303,7 @@ impl Extension {
                 | RepairedRtpStreamId
                 | RtpMid
                 | AbsoluteSendTime
+                | AbsoluteCaptureTime
                 | AudioLevel
                 | TransportSequenceNumber
                 | TransmissionTimeOffset
@@ -308,6 +324,7 @@ impl Extension {
                 | RepairedRtpStreamId
                 | RtpMid
                 | AbsoluteSendTime
+                | AbsoluteCaptureTime
                 | VideoOrientation
                 | TransportSequenceNumber
                 | TransmissionTimeOffset
@@ -633,6 +650,23 @@ impl Extension {
                 buf[..3].copy_from_slice(&time_24.to_be_bytes()[1..]);
                 Some(3)
             }
+            AbsoluteCaptureTime => {
+                // 64-bit NTP timestamp (UQ32.32 format)
+                let timestamp = ev.abs_capture_timestamp?;
+
+                buf[..8].copy_from_slice(&timestamp.to_be_bytes());
+
+                // Optional: estimated capture clock offset (64-bit signed, Q32.32 format)
+                if let Some(offset) = ev.estimated_capture_clock_offset {
+                    if buf.len() < 16 {
+                        return None;
+                    }
+                    buf[8..16].copy_from_slice(&offset.to_be_bytes());
+                    Some(16)
+                } else {
+                    Some(8)
+                }
+            }
             AudioLevel => {
                 let v1 = ev.audio_level?;
                 let v2 = ev.voice_activity?;
@@ -744,6 +778,27 @@ impl Extension {
 
                 let time_tmp = already_happened() + time_dur;
                 ev.abs_send_time = Some(time_tmp);
+            }
+            // 8 or 16
+            AbsoluteCaptureTime => {
+                // Minimum 8 bytes for the timestamp
+                if buf.len() < 8 {
+                    return None;
+                }
+
+                // Read 64-bit NTP timestamp (UQ32.32 format)
+                let timestamp = u64::from_be_bytes([
+                    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+                ]);
+                ev.abs_capture_timestamp = Some(timestamp);
+
+                // Optional: estimated capture clock offset (64-bit signed, Q32.32 format)
+                if buf.len() >= 16 {
+                    let offset = i64::from_be_bytes([
+                        buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+                    ]);
+                    ev.estimated_capture_clock_offset = Some(offset);
+                }
             }
             // 1
             AudioLevel => {
@@ -862,6 +917,14 @@ pub struct ExtensionValues {
     pub tx_time_offs: Option<u32>,
     #[doc(hidden)]
     pub abs_send_time: Option<Instant>,
+    /// NTP timestamp (64-bit UQ32.32 format) of when the first frame in a packet was originally
+    /// captured. Used for abs-capture-time extension.
+    #[doc(hidden)]
+    pub abs_capture_timestamp: Option<u64>,
+    /// Estimated capture clock offset (64-bit signed Q32.32 format). The sender's estimate of the
+    /// offset between its own NTP clock and the capture system's NTP clock.
+    #[doc(hidden)]
+    pub estimated_capture_clock_offset: Option<i64>,
     #[doc(hidden)]
     pub transport_cc: Option<u16>, // (buf[0] << 8) | buf[1];
     #[doc(hidden)]
@@ -1048,6 +1111,12 @@ impl fmt::Debug for ExtensionValues {
         if let Some(t) = self.abs_send_time {
             write!(f, " abs_send_time: {:?}", t)?;
         }
+        if let Some(t) = self.abs_capture_timestamp {
+            write!(f, " abs_capture_timestamp: {t}")?;
+        }
+        if let Some(t) = self.estimated_capture_clock_offset {
+            write!(f, " estimated_capture_clock_offset: {t}")?;
+        }
         if let Some(t) = self.voice_activity {
             write!(f, " voice_activity: {t}")?;
         }
@@ -1103,6 +1172,7 @@ impl fmt::Display for Extension {
             "{}",
             match self {
                 AbsoluteSendTime => "abs-send-time",
+                AbsoluteCaptureTime => "abs-capture-time",
                 AudioLevel => "ssrc-audio-level",
                 TransmissionTimeOffset => "toffset",
                 VideoOrientation => "video-orientation",
@@ -1166,6 +1236,7 @@ impl PartialEq for Extension {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Extension::AbsoluteSendTime, Extension::AbsoluteSendTime) => true,
+            (Extension::AbsoluteCaptureTime, Extension::AbsoluteCaptureTime) => true,
             (Extension::AudioLevel, Extension::AudioLevel) => true,
             (Extension::TransmissionTimeOffset, Extension::TransmissionTimeOffset) => true,
             (Extension::VideoOrientation, Extension::VideoOrientation) => true,
@@ -1243,6 +1314,55 @@ mod test {
         let abs = if now > now2 { now - now2 } else { now2 - now };
 
         assert!(abs < Duration::from_millis(1));
+    }
+
+    #[test]
+    fn abs_capture_time() {
+        // NTP timestamp for testing (some arbitrary time)
+        let timestamp: u64 = 0x123456789ABCDEF0;
+
+        let mut exts = ExtensionMap::empty();
+        exts.set(5, Extension::AbsoluteCaptureTime);
+        let ev = ExtensionValues {
+            abs_capture_timestamp: Some(timestamp),
+            ..Default::default()
+        };
+
+        let mut buf = vec![0_u8; 16];
+        exts.write_to(&mut buf[..], &ev, ExtensionsForm::OneByte);
+
+        let mut ev2 = ExtensionValues::default();
+        exts.parse(&buf, ExtensionsForm::OneByte, &mut ev2);
+
+        assert_eq!(ev.abs_capture_timestamp, ev2.abs_capture_timestamp);
+        assert_eq!(ev.estimated_capture_clock_offset, ev2.estimated_capture_clock_offset);
+    }
+
+    #[test]
+    fn abs_capture_time_with_offset() {
+        // NTP timestamp for testing
+        let timestamp: u64 = 0x123456789ABCDEF0;
+        // Clock offset (signed 64-bit)
+        let clock_offset: i64 = -123456789;
+
+        let mut exts = ExtensionMap::empty();
+        exts.set(5, Extension::AbsoluteCaptureTime);
+        let ev = ExtensionValues {
+            abs_capture_timestamp: Some(timestamp),
+            estimated_capture_clock_offset: Some(clock_offset),
+            ..Default::default()
+        };
+
+        let mut buf = vec![0_u8; 24];
+        // With clock offset, it should require two-byte form
+        assert_eq!(ExtensionsForm::TwoByte, exts.form(&ev));
+        exts.write_to(&mut buf[..], &ev, ExtensionsForm::TwoByte);
+
+        let mut ev2 = ExtensionValues::default();
+        exts.parse(&buf, ExtensionsForm::TwoByte, &mut ev2);
+
+        assert_eq!(ev.abs_capture_timestamp, ev2.abs_capture_timestamp);
+        assert_eq!(ev.estimated_capture_clock_offset, ev2.estimated_capture_clock_offset);
     }
 
     #[test]
